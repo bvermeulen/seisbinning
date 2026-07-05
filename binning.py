@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 import math
 from sqlalchemy import create_engine, text
-from bins import read_config, calc_bin_index
+from bins import read_config, BinCalcs
 
 BATCH_SIZE = 10_000
 config = read_config()
@@ -32,6 +32,7 @@ class Binning:
         self.table = "traces"
         self.engine = create_engine(db_file)
         self.create_traces_table()
+        self.calcs = BinCalcs(origin, bin_size[0], bin_size[1])
 
     def create_traces_table(self):
         with self.engine.connect() as connection:
@@ -46,9 +47,11 @@ class Binning:
                 f"src_line REAL, "
                 f"src_point REAL, "
                 f"src_index INTEGER, "
+                f"src_code VAR(2), "
                 f"rcv_line REAL, "
                 f"rcv_point REAL, "
                 f"rcv_index INTEGER, "
+                f"rcv_code VAR(2), "
                 f"mid_point_x DOUBLE PRECISION, "
                 f"mid_point_y DOUBLE PRECISION, "
                 f"offset REAL, "
@@ -70,6 +73,7 @@ class Binning:
             "line": [],
             "point": [],
             "p_index": [],
+            "p_code": [],
             "easting": [],
             "northing": [],
             "elevation": [],
@@ -78,14 +82,18 @@ class Binning:
             if line[0] != "R":
                 continue
 
-            rcv_dict["type"].append(line[0])
-            rcv_dict["line"].append(float(line[1:12]))
-            rcv_dict["point"].append(float(line[12:22]))
-            rcv_dict["p_index"].append(int(line[22:25]))
-            rcv_dict["easting"].append(float(line[46:56]))
-            rcv_dict["northing"].append(float(line[56:66]))
+            if p_code := line[24:26].strip() == "KL":
+                continue
+
+            rcv_dict["type"].append(line[0:1])
+            rcv_dict["line"].append(float(line[1:11]))
+            rcv_dict["point"].append(float(line[11:21]))
+            rcv_dict["p_index"].append(int(line[21:24]))
+            rcv_dict["p_code"].append(p_code)
+            rcv_dict["easting"].append(float(line[45:55]))
+            rcv_dict["northing"].append(float(line[55:65]))
             rcv_dict["elevation"].append(
-                (float(line[66:75]) if line[66:75].replace(" ", "") else 0.0)
+                (float(line[65:75]) if line[65:75].replace(" ", "") else 0.0)
             )
 
         rcv_df = pd.DataFrame(rcv_dict)
@@ -101,6 +109,7 @@ class Binning:
             "line": [],
             "point": [],
             "p_index": [],
+            "p_code": [],
             "easting": [],
             "northing": [],
             "elevation": [],
@@ -109,21 +118,18 @@ class Binning:
             if line[0] != "S":
                 continue
 
-            p_index = line[22:25].strip()
-            if p_index[-2:] == "KL":
+            if p_code := line[24:26].strip() == "KL":
                 continue
 
-            else:
-                p_index = int(p_index[0:1])
-
-            src_dict["type"].append(line[0])
-            src_dict["line"].append(float(line[1:12]))
-            src_dict["point"].append(float(line[12:22]))
-            src_dict["p_index"].append(p_index)
-            src_dict["easting"].append(float(line[46:56]))
-            src_dict["northing"].append(float(line[56:66]))
+            src_dict["type"].append(line[0:1])
+            src_dict["line"].append(float(line[1:11]))
+            src_dict["point"].append(float(line[11:21]))
+            src_dict["p_index"].append(int(line[21:24]))
+            src_dict["p_code"].append(p_code)
+            src_dict["easting"].append(float(line[45:55]))
+            src_dict["northing"].append(float(line[55:65]))
             src_dict["elevation"].append(
-                (float(line[66:75]) if line[66:75].replace(" ", "") else 0.0)
+                (float(line[66:75]) if line[65:74].replace(" ", "") else 0.0)
             )
 
         src_df = pd.DataFrame(src_dict)
@@ -194,9 +200,11 @@ class Binning:
                     "src_line": [],
                     "src_point": [],
                     "src_index": [],
+                    "src_code": [],
                     "rcv_line": [],
                     "rcv_point": [],
                     "rcv_index": [],
+                    "rcv_code": [],
                     "mid_point_x": [],
                     "mid_point_y": [],
                     "offset": [],
@@ -215,6 +223,7 @@ class Binning:
             ]
             src_easting = float(selected_src_df.easting.iloc[0])
             src_northing = float(selected_src_df.northing.iloc[0])
+            src_code = selected_src_df.p_code.iloc[0]
             rcv_line = x_row["rcv_line"]
             rcv_point_start = x_row["rcv_point_start"]
             rcv_point_end = x_row["rcv_point_end"]
@@ -226,21 +235,22 @@ class Binning:
             ]
             rcv_dict = filter_rcv_by_line_df.to_dict(orient="records")
             for rcv_row in rcv_dict:
+                rcv_code = rcv_row["p_code"]
                 mid_point_x = (src_easting + rcv_row["easting"]) * 0.5
                 mid_point_y = (src_northing + rcv_row["northing"]) * 0.5
                 dx = rcv_row["easting"] - src_easting
                 dy = rcv_row["northing"] - src_northing
-                bin_sp, bin_rp = calc_bin_index(
-                    mid_point_x, mid_point_y, origin, bin_size[0], bin_size[1]
-                )
+                bin_sp, bin_rp = self.calcs.calc_bin_index(mid_point_x, mid_point_y)
                 azimuth = math.degrees(math.atan2(dy, dx))
                 offset = math.sqrt(dx * dx + dy * dy)
                 traces_dict["src_line"].append(src_line)
                 traces_dict["src_point"].append(src_point)
                 traces_dict["src_index"].append(src_index)
+                traces_dict["src_code"].append(src_code)
                 traces_dict["rcv_line"].append(rcv_row["line"])
                 traces_dict["rcv_point"].append(rcv_row["point"])
                 traces_dict["rcv_index"].append(rcv_index)
+                traces_dict["rcv_code"].append(rcv_code)
                 traces_dict["mid_point_x"].append(mid_point_x)
                 traces_dict["mid_point_y"].append(mid_point_y)
                 traces_dict["offset"].append(offset)

@@ -20,14 +20,14 @@ from functools import wraps
 DEG2RAD = np.pi / 180.0
 
 
-def read_config() -> dict:
-    with open("./config.json", "rt") as jsf:
+def read_config(config_file: Path) -> dict:
+    with open(config_file, "rt") as jsf:
         config = json.load(jsf)
         config["azimuth"] *= DEG2RAD
     return config
 
 
-def progress_message_generator(message):
+def progress_message_generator(message: str):
     print()
     loop_dash = ["\u2014", "\\", "|", "/"]
     i = 1
@@ -144,6 +144,34 @@ class DbBins:
         self.calcs = BinCalcs(self.origin, self.bin_sp_int, self.bin_rp_int)
 
     @db_connect
+    def create_config_table(self, cursor):
+        sql_string = (
+            f"CREATE TABLE IF NOT EXISTS seis_config ("
+            f"key TEXT PRIMARY KEY, "
+            f"value TEXT NOT NULL);"
+        )
+        cursor.execute (sql_string)
+
+    @db_connect
+    def update_seis_config(self, key, value, cursor):
+        sql_string = (
+            f"INSERT OR REPLACE INTO seis_config (key, value) "
+            f"VALUES (?, ?);"
+        )
+        cursor.execute(sql_string, (key, value))
+
+    def store_config(self, config: dict):
+        self.update_seis_config("file_stem", config["bin_files_stem"])
+        self.update_seis_config("azimuth", str(config["azimuth"]))
+        self.update_seis_config("easting_orig", str(config["easting"]))
+        self.update_seis_config("northing_orig", str(config["northing"]))
+        self.update_seis_config("bin_sp_int", str(config["bin_sp_int"]))
+        self.update_seis_config("bin_rp_int", str(config["bin_rp_int"]))
+        self.update_seis_config("nb_bin_sp", str(config["nb_bin_sp"]))
+        self.update_seis_config("nb_bin_rp", str(config["nb_bin_rp"]))
+        self.update_seis_config("epsg", str(config["epsg"]))
+
+    @db_connect
     def create_bins_table(self, cursor):
         sql_string = (
             f"CREATE TABLE {self.table} ("
@@ -185,7 +213,7 @@ class DbBins:
 
 
 def main():
-    config = read_config()
+    config = read_config("./config.json")
     file_stem = config["bin_files_stem"]
     azimuth = config["azimuth"]
     origin = (config["easting"], config["northing"], azimuth)
@@ -193,9 +221,9 @@ def main():
     bin_sp_int = config["bin_sp_int"]
     nb_bin_sp = config["nb_bin_sp"]
     nb_bin_rp = config["nb_bin_rp"]
+    epsg = config["epsg"]
 
     database_file = Path(file_stem + "_bins.sqlite")
-    epsg = 32638
     create_database(database_file)
     db_bins = DbBins(
         database_file,
@@ -207,9 +235,10 @@ def main():
         bin_sp_int,
         bin_rp_int,
     )
+    db_bins.create_config_table()
+    db_bins.store_config(config)
     db_bins.create_bins_table()
     db_bins.create_bins()
-
 
 if __name__ == "__main__":
     main()

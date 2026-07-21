@@ -11,28 +11,71 @@ azimuth 90 -
     use negative source_bin_interval to have source to increase with y axis
 """
 
+import sys
 import time
 from pathlib import Path
 import pandas as pd
 import math
 from sqlalchemy import create_engine, text
-from bins import read_config, BinCalcs
+from bins import BinCalcs
 
 BATCH_SIZE = 10_000
-config = read_config()
-bin_files_stem = config["bin_files_stem"]
-azimuth = config["azimuth"]
-origin = (config["easting"], config["northing"], azimuth)
-bin_size = (config["bin_sp_int"], config["bin_rp_int"])
 
 
 class Binning:
-    def __init__(self):
-        db_file = "sqlite:///" + bin_files_stem + "_bins.sqlite"
+    def __init__(self, db_file):
+        db_uri = "".join(["sqlite:///", str(db_file)])
+        self.engine = create_engine(db_uri)
+        self._config = self.get_config_from_db()
+        origin = (
+            self._config["easting_orig"],
+            self._config["northing_orig"],
+            self._config["azimuth"],
+        )
+        bin_size = (
+            self._config["bin_sp_int"], 
+            self._config["bin_rp_int"]
+        )
+
         self.table = "traces"
-        self.engine = create_engine(db_file)
         self.create_traces_table()
         self.calcs = BinCalcs(origin, bin_size[0], bin_size[1])
+
+    @property
+    def config(self):
+        return self._config
+
+    def get_config_from_db(self):
+        sql = text("select value from seis_config WHERE key = :key;")
+        config = {}
+        with self.engine.connect() as conn:
+            config["file_stem"] = conn.execute(sql, {"key": "file_stem"}).fetchone()[0]
+            config["azimuth"] = float(
+                conn.execute(sql, {"key": "azimuth"}).fetchone()[0]
+            )
+            config["easting_orig"] = float(
+                conn.execute(sql, {"key": "easting_orig"}).fetchone()[0]
+            )
+            config["northing_orig"] = float(
+                conn.execute(sql, {"key": "northing_orig"}).fetchone()[0]
+            )
+            config["bin_sp_int"] = int(
+                float(conn.execute(sql, {"key": "bin_sp_int"}).fetchone()[0])
+            )
+            config["bin_rp_int"] = int(
+                float(conn.execute(sql, {"key": "bin_rp_int"}).fetchone()[0])
+            )
+            config["nb_bin_sp"] = int(
+                float(conn.execute(sql, {"key": "nb_bin_sp"}).fetchone()[0])
+            )
+            config["nb_bin_rp"] = int(
+                float(conn.execute(sql, {"key": "nb_bin_rp"}).fetchone()[0])
+            )
+            config["epsg"] = int(
+                float(conn.execute(sql, {"key": "epsg"}).fetchone()[0])
+            )
+
+        return config
 
     def create_traces_table(self):
         with self.engine.connect() as connection:
@@ -64,7 +107,7 @@ class Binning:
             connection.commit
 
     def parse_sps_rcv(self) -> pd.DataFrame:
-        sps_rcv_file = Path(bin_files_stem + ".R")
+        sps_rcv_file = Path(self.config["file_stem"] + ".R")
         with open(sps_rcv_file, mode="rt") as file:
             lines = file.readlines()
 
@@ -82,7 +125,7 @@ class Binning:
             if line[0] != "R":
                 continue
 
-            if p_code := line[24:26].strip() == "KL":
+            if (p_code := line[24:26].strip()) == "KL":
                 continue
 
             rcv_dict["type"].append(line[0:1])
@@ -100,7 +143,7 @@ class Binning:
         return rcv_df
 
     def parse_sps_src(self) -> pd.DataFrame:
-        sps_src_file = Path(bin_files_stem + ".S")
+        sps_src_file = Path(self.config["file_stem"] + ".S")
         with open(sps_src_file, mode="rt") as file:
             lines = file.readlines()
 
@@ -118,7 +161,7 @@ class Binning:
             if line[0] != "S":
                 continue
 
-            if p_code := line[24:26].strip() == "KL":
+            if (p_code := line[24:26].strip()) == "KL":
                 continue
 
             src_dict["type"].append(line[0:1])
@@ -136,7 +179,7 @@ class Binning:
         return src_df
 
     def parse_sps_x(self) -> pd.DataFrame:
-        sps_x_file = Path(bin_files_stem + ".X")
+        sps_x_file = Path(self.config["file_stem"] + ".X")
         with open(sps_x_file, mode="rt") as file:
             lines = file.readlines()
 
@@ -238,10 +281,10 @@ class Binning:
                 rcv_code = rcv_row["p_code"]
                 mid_point_x = (src_easting + rcv_row["easting"]) * 0.5
                 mid_point_y = (src_northing + rcv_row["northing"]) * 0.5
-                dx = rcv_row["easting"] - src_easting
-                dy = rcv_row["northing"] - src_northing
+                dx = src_easting - rcv_row["easting"]
+                dy = src_northing - rcv_row["northing"]
                 bin_sp, bin_rp = self.calcs.calc_bin_index(mid_point_x, mid_point_y)
-                azimuth = math.degrees(math.atan2(dy, dx))
+                azimuth = math.degrees(math.atan2(dx, dy))
                 offset = math.sqrt(dx * dx + dy * dy)
                 traces_dict["src_line"].append(src_line)
                 traces_dict["src_point"].append(src_point)
@@ -267,14 +310,19 @@ class Binning:
         print(f"{trace_count=:,}")
 
 
-def main():
-    s2d = Binning()
+def main(argv):
+    if len(argv) != 2:
+        print("Provide the bins database file as argument!")
+    db_file = Path(argv[1])
+
+    s2d = Binning(db_file)
+    bin_files_stem = s2d.config["file_stem"]
     rcv_df = s2d.parse_sps_rcv()
-    s2d.save_dataframe(rcv_df, Path(bin_files_stem + "_rcv.parquet"))
+    s2d.save_dataframe(rcv_df, bin_files_stem + "_rcv.parquet")
     src_df = s2d.parse_sps_src()
-    s2d.save_dataframe(src_df, Path(bin_files_stem + "_src.parquet"))
+    s2d.save_dataframe(src_df, bin_files_stem + "_src.parquet")
     x_df = s2d.parse_sps_x()
-    s2d.save_dataframe(x_df, Path(bin_files_stem + "_x.parquet"))
+    s2d.save_dataframe(x_df, bin_files_stem + "_x.parquet")
 
     t1 = time.time_ns()
     s2d.traces(rcv_df, src_df, x_df)
@@ -283,4 +331,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)

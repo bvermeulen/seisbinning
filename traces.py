@@ -16,26 +16,24 @@ import time
 from pathlib import Path
 import pandas as pd
 import math
-from sqlalchemy import create_engine, text
-from bins import BinCalcs
+from sqlalchemy import create_engine, text, bindparam
+from bins import DEG2RAD, DbTools, BinCalcs
 
 BATCH_SIZE = 10_000
 
 
-class Binning:
+class Traces:
     def __init__(self, db_file):
         db_uri = "".join(["sqlite:///", str(db_file)])
         self.engine = create_engine(db_uri)
-        self._config = self.get_config_from_db()
+        self.db_tools = DbTools(db_file)
+        self._config = self.db_tools.get_config_from_db()
         origin = (
             self._config["easting_orig"],
             self._config["northing_orig"],
-            self._config["azimuth"],
+            self._config["azimuth"] * DEG2RAD,
         )
-        bin_size = (
-            self._config["bin_sp_int"], 
-            self._config["bin_rp_int"]
-        )
+        bin_size = (self._config["bin_sp_int"], self._config["bin_rp_int"])
         self.table = "traces"
         self.create_traces_table()
         self.calcs = BinCalcs(origin, bin_size[0], bin_size[1])
@@ -43,38 +41,6 @@ class Binning:
     @property
     def config(self):
         return self._config
-
-    def get_config_from_db(self):
-        sql = text("select value from seis_config WHERE key = :key;")
-        config = {}
-        with self.engine.connect() as conn:
-            config["file_stem"] = conn.execute(sql, {"key": "file_stem"}).fetchone()[0]
-            config["azimuth"] = float(
-                conn.execute(sql, {"key": "azimuth"}).fetchone()[0]
-            )
-            config["easting_orig"] = float(
-                conn.execute(sql, {"key": "easting_orig"}).fetchone()[0]
-            )
-            config["northing_orig"] = float(
-                conn.execute(sql, {"key": "northing_orig"}).fetchone()[0]
-            )
-            config["bin_sp_int"] = int(
-                float(conn.execute(sql, {"key": "bin_sp_int"}).fetchone()[0])
-            )
-            config["bin_rp_int"] = int(
-                float(conn.execute(sql, {"key": "bin_rp_int"}).fetchone()[0])
-            )
-            config["nb_bin_sp"] = int(
-                float(conn.execute(sql, {"key": "nb_bin_sp"}).fetchone()[0])
-            )
-            config["nb_bin_rp"] = int(
-                float(conn.execute(sql, {"key": "nb_bin_rp"}).fetchone()[0])
-            )
-            config["epsg"] = int(
-                float(conn.execute(sql, {"key": "epsg"}).fetchone()[0])
-            )
-
-        return config
 
     def create_traces_table(self):
         with self.engine.connect() as connection:
@@ -156,25 +122,29 @@ class Binning:
             "northing": [],
             "elevation": [],
         }
+        src_indexes = set()
         for line in lines:
             if line[0] != "S":
                 continue
 
+            p_index = int(line[21:24])
             if (p_code := line[24:26].strip()) == "KL":
                 continue
 
             src_dict["type"].append(line[0:1])
             src_dict["line"].append(float(line[1:11]))
             src_dict["point"].append(float(line[11:21]))
-            src_dict["p_index"].append(int(line[21:24]))
+            src_dict["p_index"].append(p_index)
             src_dict["p_code"].append(p_code)
             src_dict["easting"].append(float(line[45:55]))
             src_dict["northing"].append(float(line[55:65]))
             src_dict["elevation"].append(
                 (float(line[66:75]) if line[65:74].replace(" ", "") else 0.0)
             )
+            src_indexes.add(p_index)
 
         src_df = pd.DataFrame(src_dict)
+        self.db_tools.update_seis_config("src_indexes", ",".join([str(v) for v in src_indexes]))
         return src_df
 
     def parse_sps_x(self) -> pd.DataFrame:
@@ -219,7 +189,7 @@ class Binning:
     def save_dataframe(self, df: pd.DataFrame, filename: Path):
         df.to_parquet(filename)
 
-    def traces(
+    def create_traces(
         self, rcv_df: pd.DataFrame, src_df: pd.DataFrame, x_df: pd.DataFrame
     ) -> pd.DataFrame:
 
@@ -307,26 +277,64 @@ class Binning:
             name=self.table, con=self.engine, if_exists="append", index=False
         )
         print(f"{trace_count=:,}")
+        self.db_tools.set_index_traces()
+        print(f"complete indexing ...")
+
+    def clear_bins(self):
+        query = text("UPDATE bins SET bin_count = null;")
+        with self.engine.connect() as connection:
+            connection.execute(query)
+            connection.commit()
+
+    def bin_traces(self, offset: float) -> None:
+        src_indexes = self.db_tools.get_config_from_db()["src_indexes"]
+        self.clear_bins()
+        query = text(
+            f"UPDATE bins SET bin_count = bc FROM "
+            f"(SELECT bin_sp, bin_rp, count(*) as bc "
+            f"from traces tr NOT INDEXED "
+            f"WHERE "
+            f"tr.offset >= 0 and tr.offset < :offset AND "
+            f"tr.src_index in :src_indexes "
+            f"GROUP BY tr.bin_sp, tr.bin_rp "
+            f") AS bins_grouped "
+            f"WHERE bins.bin_sp = bins_grouped.bin_sp and bins.bin_rp = bins_grouped.bin_rp;"
+        )
+        query = query.bindparams(bindparam("src_indexes", expanding=True))
+        with self.engine.connect() as connection:
+            connection.execute(
+                query, {"offset": offset, "src_indexes": src_indexes}
+            )
+            connection.commit()
+
+        self.db_tools.update_seis_config("offset", str(offset))
+        print(f"Binning of traces is completed ...")
 
 
 def main(argv):
     if len(argv) != 2:
         print("Provide the bins database file as argument!")
+        sys.exit()
     db_file = Path(argv[1])
 
-    s2d = Binning(db_file)
-    bin_files_stem = s2d.config["file_stem"]
-    rcv_df = s2d.parse_sps_rcv()
-    s2d.save_dataframe(rcv_df, bin_files_stem + "_rcv.parquet")
-    src_df = s2d.parse_sps_src()
-    s2d.save_dataframe(src_df, bin_files_stem + "_src.parquet")
-    x_df = s2d.parse_sps_x()
-    s2d.save_dataframe(x_df, bin_files_stem + "_x.parquet")
+    traces = Traces(db_file)
+    bin_files_stem = traces.config["file_stem"]
+    rcv_df = traces.parse_sps_rcv()
+    traces.save_dataframe(rcv_df, bin_files_stem + "_rcv.parquet")
+    src_df = traces.parse_sps_src()
+    traces.save_dataframe(src_df, bin_files_stem + "_src.parquet")
+    x_df = traces.parse_sps_x()
+    traces.save_dataframe(x_df, bin_files_stem + "_x.parquet")
 
     t1 = time.time_ns()
-    s2d.traces(rcv_df, src_df, x_df)
+    traces.create_traces(rcv_df, src_df, x_df)
     t2 = time.time_ns()
     print(f"trace creation, duration: {(t2 - t1) * 1e-9 / 60:.2f} minutes")
+
+    t1 = time.time_ns()
+    traces.bin_traces(2500)
+    t2 = time.time_ns()
+    print(f"binning of traces, duration: {(t2 - t1) * 1e-9 / 60:.2f} minutes")
 
 
 if __name__ == "__main__":

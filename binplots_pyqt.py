@@ -4,12 +4,14 @@ email: bvermeulen@hotmail.com
 ©2026 howdimain
 admin@howdiweb.nl
 """
+
 import sys
 import datetime
 from functools import partial
 import warnings
 from pathlib import Path
-from bin_attributes import read_config, BinAttributes
+from bins import DbTools
+from bin_attributes import BinAttributes
 from PyQt6 import uic, QtWidgets
 import matplotlib
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -17,20 +19,23 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 matplotlib.use("QtAgg")
 warnings.filterwarnings("ignore", category=UserWarning)
 
-DEFAULT_MAX_OFFSET = 4500
-DEFAULT_INDEXES = [1, 2]
 
 class MplCanvas(FigureCanvas):
     def __init__(self, fig):
         super().__init__(fig)
 
+
 class PyqtViewControl(QtWidgets.QMainWindow):
     """PyQt view and control"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, arguments, *args, **kwargs):
         super().__init__(*args, **kwargs)
         uic.loadUi(Path(__file__).parent / "binning_plots.ui", self)
-        self.bins_file_stem = read_config("./config.json")["bin_files_stem"]
+        print(arguments)
+        if len(arguments) != 2:
+            print("Provide the db file name as the first argument ...")
+        self.bins_file_stem = Path(arguments[1]).parent / Path(arguments[1]).stem
+        self.config = DbTools(arguments[1]).get_config_from_db()
         self.save_folder_description = "Save to: "
         self.ActionQuit.triggered.connect(self.quit)
         self.ActionDefaultDatabase.triggered.connect(
@@ -49,9 +54,9 @@ class PyqtViewControl(QtWidgets.QMainWindow):
         self.clear_vals()
         for _, value in self.plot_dict.items():
             value["rb"].clicked.connect(partial(self.show_plot, value["index"] - 1))
-        self.save_folder = Path(self.bins_file_stem).parent / "bin_plots"
+        self.save_folder = self.bins_file_stem.parent / "bin_plots"
         self.RB_Type_01.setChecked(True)
-        self.DbLabel.setText(Path(self.bins_file_stem).name)
+        self.DbLabel.setText(self.bins_file_stem.name)
         self.SaveFolderLabel.setText(
             "".join([self.save_folder_description, str(self.save_folder)])
         )
@@ -91,14 +96,16 @@ class PyqtViewControl(QtWidgets.QMainWindow):
         self.LineEdit_03.setText("")
         self.LineEdit_04.setText("")
         self.LineEdit_05.setText("")
-        self.LineEdit_06.setText(f"{", ".join(str(i) for i in DEFAULT_INDEXES)}")
-        self.LineEdit_07.setText(f"{int(DEFAULT_MAX_OFFSET)}")
+        self.LineEdit_06.setText(
+            f"{", ".join(str(i) for i in self.config["src_indexes"])}"
+        )
+        self.LineEdit_07.setText(f"{int(self.config["offset"])}")
         self.figure_dict = {}
         self.center_bin_name = ""
 
     def select_bin(self):
         bin = self.LineEdit_01.text()
-        for delimeter in ["/",",",";"]:
+        for delimeter in ["/", ",", ";"]:
             bin = bin.replace(delimeter, " ")
         try:
             bin_src, bin_rcv = [int(v) for v in bin.split()]
@@ -109,8 +116,8 @@ class PyqtViewControl(QtWidgets.QMainWindow):
             return
 
         indexes = self.LineEdit_06.text()
-        for delimeter in ["/",",",";"]:
-            indexes = indexes.replace(delimeter," ")
+        for delimeter in ["/", ",", ";"]:
+            indexes = indexes.replace(delimeter, " ")
         try:
             indexes = [int(v) for v in indexes.split()]
             if not indexes or not all(v > 0 for v in indexes):
@@ -119,34 +126,31 @@ class PyqtViewControl(QtWidgets.QMainWindow):
         except ValueError:
             return
 
-        max_offset = self.LineEdit_07.text()
+        offset = self.LineEdit_07.text()
         try:
-            max_offset = float(max_offset)
-            if not (max_offset > 0):
+            offset = float(offset)
+            if not (offset > 0):
                 raise ValueError("max offset must be positive")
 
         except ValueError:
             return
 
         self.center_bin_name = f"{bin_src}_{bin_rcv}"
-        ba = BinAttributes(
-            self.bins_file_stem,
-            (bin_src, bin_rcv),
-            indexes,
-            max_offset
-        )
+        db_file = self.bins_file_stem.with_suffix(".sqlite")
+        ba = BinAttributes(db_file, (bin_src, bin_rcv), offset, indexes)
+        ba.get_surrounding_bins()
         bin_line, bin_point, easting, northing, traces = ba.calc_bin_values(0, 0)
         self.LineEdit_02.setText(f"{easting:.0f}")
         self.LineEdit_03.setText(f"{northing:.0f}")
         self.LineEdit_04.setText(f"{bin_line}/ {bin_point}")
         self.LineEdit_05.setText(f"{traces}")
         self.LineEdit_06.setText(f"{", ".join(str(i) for i in indexes)}")
-        self.LineEdit_07.setText(f"{int(max_offset)}")
+        self.LineEdit_07.setText(f"{int(offset)}")
         self.figure_dict["Offset"] = ba.diagram(ba.setup_plot_cartesian, ba.plot_offset)
         self.figure_dict["Spider"] = ba.diagram(ba.setup_plot_cartesian, ba.plot_spider)
         self.figure_dict["Rose"] = ba.diagram(ba.setup_plot_polar, ba.plot_rose)
         self.update_canvas_data(self.figure_dict)
-        # make sure there is destructor (__del__) to apply plt.close('all') to remove all figures 
+        # make sure there is destructor (__del__) to apply plt.close('all') to remove all figures
         del ba
 
     def update_canvas_data(self, figure_dict):
@@ -166,8 +170,7 @@ class PyqtViewControl(QtWidgets.QMainWindow):
 
     def select_database(self, default=True):
         if default:
-            bins_file_stem = read_config("./config.json")["bin_files_stem"]
-            bins_file_stem = Path(bins_file_stem)
+            self.bins_file_stem = Path(self.config["file_stem"])
 
         else:
             bfn = QtWidgets.QFileDialog.getOpenFileName(
@@ -176,15 +179,19 @@ class PyqtViewControl(QtWidgets.QMainWindow):
                 str(self.bins_file_stem),
                 "SQLite files (*.sqlite3 *.sqlite);; All (*.*)",
             )[0]
-            bins_file_stem = Path(bfn).parent / Path(bfn).stem
+            self.bins_file_stem = Path(bfn).parent / Path(bfn).stem
 
-        self.bins_file_stem = str(bins_file_stem)
-        self.DbLabel.setText(bins_file_stem.stem)
+        self.DbLabel.setText(self.bins_file_stem.stem)
+        self.config = DbTools(
+            self.bins_file_stem.with_suffix(".sqlite")
+        ).get_config_from_db()
         self.clear_vals()
 
     def select_save_folder(self):
         save_folder = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select a save folder", directory=Path(self.bins_file_stem).parent.as_posix()
+            self,
+            "Select a save folder",
+            directory=Path(self.bins_file_stem).parent.as_posix(),
         )
         if save_folder:
             self.save_folder = Path(save_folder)
@@ -200,7 +207,13 @@ class PyqtViewControl(QtWidgets.QMainWindow):
                 continue
 
             file_name = self.save_folder / "".join(
-                [base_file_name, value.get("file_name"), "_", self.center_bin_name, ".png"]
+                [
+                    base_file_name,
+                    value.get("file_name"),
+                    "_",
+                    self.center_bin_name,
+                    ".png",
+                ]
             )
             fig.savefig(file_name)
 
@@ -209,8 +222,8 @@ class PyqtViewControl(QtWidgets.QMainWindow):
 
 
 def start_app():
-    app = QtWidgets.QApplication([])
-    view_control = PyqtViewControl()
+    app = QtWidgets.QApplication(sys.argv)
+    view_control = PyqtViewControl(app.arguments())
     view_control.show()
     app.exec()
 

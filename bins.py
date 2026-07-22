@@ -23,7 +23,6 @@ DEG2RAD = np.pi / 180.0
 def read_config(config_file: Path) -> dict:
     with open(config_file, "rt") as jsf:
         config = json.load(jsf)
-        config["azimuth"] *= DEG2RAD
     return config
 
 
@@ -120,6 +119,87 @@ def create_database(database_file):
     print(f"Database {database_file} created ...")
 
 
+class DbTools:
+    def __init__(self, database_file: Path):
+        self.database_file = database_file
+
+    @db_connect
+    def create_config_table(self, cursor):
+        sql_string = (
+            f"CREATE TABLE IF NOT EXISTS seis_config ("
+            f"key TEXT PRIMARY KEY, "
+            f"value TEXT NOT NULL);"
+        )
+        cursor.execute(sql_string)
+
+    @db_connect
+    def update_seis_config(self, key, value, cursor):
+        sql_string = (
+            f"INSERT OR REPLACE INTO seis_config (key, value) " 
+            f"VALUES (?, ?);"
+        )
+        cursor.execute(sql_string, (key, value))
+
+    def store_config(self, config: dict):
+        self.update_seis_config("file_stem", config["bin_files_stem"])
+        self.update_seis_config("azimuth", str(config["azimuth"]))
+        self.update_seis_config("easting_orig", str(config["easting"]))
+        self.update_seis_config("northing_orig", str(config["northing"]))
+        self.update_seis_config("bin_sp_int", str(config["bin_sp_int"]))
+        self.update_seis_config("bin_rp_int", str(config["bin_rp_int"]))
+        self.update_seis_config("nb_bin_sp", str(config["nb_bin_sp"]))
+        self.update_seis_config("nb_bin_rp", str(config["nb_bin_rp"]))
+        self.update_seis_config("epsg", str(config["epsg"]))
+        self.update_seis_config("offset", "0")
+        self.update_seis_config("src_indexes", "0")
+
+    @db_connect
+    def get_config_from_db(self, cursor):
+        sql_string = "select value from seis_config WHERE key = ?"
+        config = {}
+        config["file_stem"] = cursor.execute(sql_string, ("file_stem",)).fetchone()[0]
+        config["azimuth"] = float(
+            cursor.execute(sql_string, ("azimuth",)).fetchone()[0]
+        )
+        config["easting_orig"] = float(
+            cursor.execute(sql_string, ("easting_orig",)).fetchone()[0]
+        )
+        config["northing_orig"] = float(
+            cursor.execute(sql_string, ("northing_orig",)).fetchone()[0]
+        )
+        config["bin_sp_int"] = float(
+            cursor.execute(sql_string, ("bin_sp_int",)).fetchone()[0]
+        )
+        config["bin_rp_int"] = float(
+            cursor.execute(sql_string, ("bin_rp_int",)).fetchone()[0]
+        )
+        config["nb_bin_sp"] = int(
+            float(cursor.execute(sql_string, ("nb_bin_sp",)).fetchone()[0])
+        )
+        config["nb_bin_rp"] = int(
+            float(cursor.execute(sql_string, ("nb_bin_rp",)).fetchone()[0])
+        )
+        config["epsg"] = int(float(cursor.execute(sql_string, ("epsg",)).fetchone()[0]))
+        config["offset"] = float(cursor.execute(sql_string, ("offset",)).fetchone()[0])
+        config["src_indexes"] = [
+            int(v)
+            for v in cursor.execute(sql_string, ("src_indexes",)).fetchone()[0].split(",")
+        ]
+        return config
+
+    @db_connect
+    def set_index_traces(self, cursor):
+        sql_string = (
+            "DROP INDEX IF EXISTS bin_idx"
+        )
+        cursor.execute(sql_string)
+
+        sql_string = (
+            "CREATE INDEX bin_idx ON traces (bin_sp, bin_rp);"
+        )
+        cursor.execute(sql_string)
+
+
 class DbBins:
 
     def __init__(
@@ -142,34 +222,6 @@ class DbBins:
         self.bin_sp_int = bin_sp_int
         self.bin_rp_int = bin_rp_int
         self.calcs = BinCalcs(self.origin, self.bin_sp_int, self.bin_rp_int)
-
-    @db_connect
-    def create_config_table(self, cursor):
-        sql_string = (
-            f"CREATE TABLE IF NOT EXISTS seis_config ("
-            f"key TEXT PRIMARY KEY, "
-            f"value TEXT NOT NULL);"
-        )
-        cursor.execute (sql_string)
-
-    @db_connect
-    def update_seis_config(self, key, value, cursor):
-        sql_string = (
-            f"INSERT OR REPLACE INTO seis_config (key, value) "
-            f"VALUES (?, ?);"
-        )
-        cursor.execute(sql_string, (key, value))
-
-    def store_config(self, config: dict):
-        self.update_seis_config("file_stem", config["bin_files_stem"])
-        self.update_seis_config("azimuth", str(config["azimuth"]))
-        self.update_seis_config("easting_orig", str(config["easting"]))
-        self.update_seis_config("northing_orig", str(config["northing"]))
-        self.update_seis_config("bin_sp_int", str(config["bin_sp_int"]))
-        self.update_seis_config("bin_rp_int", str(config["bin_rp_int"]))
-        self.update_seis_config("nb_bin_sp", str(config["nb_bin_sp"]))
-        self.update_seis_config("nb_bin_rp", str(config["nb_bin_rp"]))
-        self.update_seis_config("epsg", str(config["epsg"]))
 
     @db_connect
     def create_bins_table(self, cursor):
@@ -216,15 +268,16 @@ def main():
     config = read_config("./config.json")
     file_stem = config["bin_files_stem"]
     azimuth = config["azimuth"]
-    origin = (config["easting"], config["northing"], azimuth)
+    origin = (config["easting"], config["northing"], azimuth * DEG2RAD)
     bin_rp_int = config["bin_rp_int"]
     bin_sp_int = config["bin_sp_int"]
     nb_bin_sp = config["nb_bin_sp"]
     nb_bin_rp = config["nb_bin_rp"]
     epsg = config["epsg"]
 
-    database_file = Path(file_stem + "_bins.sqlite")
+    database_file = Path(file_stem + ".sqlite")
     create_database(database_file)
+    db_tools = DbTools(database_file)
     db_bins = DbBins(
         database_file,
         "bins",
@@ -235,10 +288,11 @@ def main():
         bin_sp_int,
         bin_rp_int,
     )
-    db_bins.create_config_table()
-    db_bins.store_config(config)
     db_bins.create_bins_table()
     db_bins.create_bins()
+    db_tools.create_config_table()
+    db_tools.store_config(config)
+
 
 if __name__ == "__main__":
     main()

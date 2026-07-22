@@ -8,46 +8,28 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.ticker as ticker
+from bins import DbTools
 from windrose import WindroseAxes
 
 DEG2RAD = np.pi / 180.0
 PLOT_BINS_WIDTH = 1 / 5
 NSECTORS = 16
-MAX_OFFSET = 2500
-SRC_INDEXES = [1, 2]
 OFFSET_MARGIN = 1.2
-
-
-def read_config(config_file: Path) -> dict:
-    with open(config_file, "rt") as jsf:
-        config = json.load(jsf)
-        config["azimuth"] *= DEG2RAD
-    return config
+DEFAULT_OFFSET = 4500
 
 
 class BinAttributes:
 
     def __init__(
-        self,
-        bin_files_stem: str,
-        center_bin: tuple[int, int],
-        src_indexes: list[int],
-        max_offset: float,
+        self, db_file: Path, center_bin: tuple[int, int], offset, src_indexes
     ) -> pd.DataFrame:
-        db_file = "sqlite:///" + bin_files_stem + ".sqlite"
-        self.engine = create_engine(db_file)
-        self.table = "traces"
+        db_uri = "".join(["sqlite:///", str(db_file)])
+        self.engine = create_engine(db_uri)
         self.center_bin = center_bin
+        self.offset = offset
         self.src_indexes = src_indexes
-        self.max_offset = max_offset
-        self.bins_df = np.empty(
-            (
-                3,
-                3,
-            ),
-            dtype=object,
-        )
-        self.get_surrounding_bins()
+        self.traces_table = "traces"
+        self.bins_df = np.empty((3, 3), dtype=object)
 
     def __del__(self):
         """destructor to remove all figures as otherwise they accumulate in memory"""
@@ -55,7 +37,7 @@ class BinAttributes:
 
     def get_bin(self, bin_src: int, bin_rcv: int):
         query = text(
-            f"SELECT * FROM {self.table} WHERE "
+            f"SELECT * FROM {self.traces_table} WHERE "
             f"bin_sp = :bin_sp AND bin_rp = :bin_rp AND "
             f"src_index in :src_indexes AND offset < :max_offset;"
         )
@@ -67,7 +49,7 @@ class BinAttributes:
                 "bin_sp": bin_src,
                 "bin_rp": bin_rcv,
                 "src_indexes": self.src_indexes,
-                "max_offset": self.max_offset,
+                "max_offset": self.offset,
             },
         )
         return bin_df
@@ -159,7 +141,7 @@ class BinAttributes:
         self.axes[i + 1][j + 1].bar(
             azimuths,
             offsets,
-            bins=np.arange(0, self.max_offset, int(self.max_offset * PLOT_BINS_WIDTH)),
+            bins=np.arange(0, self.offset, int(self.offset * PLOT_BINS_WIDTH)),
             opening=1.0,
             nsector=NSECTORS,
             edgecolor="white",
@@ -184,7 +166,7 @@ class BinAttributes:
         bin_df = self.bins_df[i, j]
         if bin_df.empty:
             return
-        max_offset = self.max_offset
+        max_offset = self.offset
         src_midline, src_midpoint, *_ = self.calc_bin_values(i, j)
         bin_text = f"{src_midline}\n" f"{src_midpoint}"
         azimuths = bin_df.azimuth * DEG2RAD
@@ -222,11 +204,15 @@ class BinAttributes:
 
 
 def main(argv: list):
-    config_file = Path("./config.json") if len(argv) != 2 else Path(argv[1])
-    config = read_config(config_file)
-    bin_files_stem = config["bin_files_stem"]
+    if len(argv) != 2:
+        print("Provide the bins database file as argument!")
+        sys.exit()
+
+    db_file = Path(argv[1])
     center_bin = np.array([502, 675], dtype=int)
-    ba = BinAttributes(bin_files_stem, center_bin, SRC_INDEXES, MAX_OFFSET)
+    config = DbTools(db_file).get_config_from_db()
+    ba = BinAttributes(db_file, center_bin, config["offset"], config["src_indexes"])
+    ba.get_surrounding_bins()
     ba.diagram(ba.setup_plot_polar, ba.plot_rose)
     ba.diagram(ba.setup_plot_cartesian, ba.plot_offset)
     ba.diagram(ba.setup_plot_cartesian, ba.plot_spider)

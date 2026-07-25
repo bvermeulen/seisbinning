@@ -15,7 +15,6 @@ DEG2RAD = np.pi / 180.0
 PLOT_BINS_WIDTH = 1 / 5
 NSECTORS = 16
 OFFSET_MARGIN = 1.2
-DEFAULT_OFFSET = 4500
 
 
 class BinAttributes:

@@ -15,13 +15,17 @@ DEG2RAD = np.pi / 180.0
 PLOT_BINS_WIDTH = 1 / 5
 NSECTORS = 16
 OFFSET_MARGIN = 1.2
+BASE_FONTSIZE = 8
+FIGSIZE = (8, 8)
+MIN_TEXT = 4
 
 
 class BinAttributes:
 
     def __init__(
-        self, db_file: Path, center_bin: tuple[int, int], offset, src_indexes
+        self, db_file: Path, center_bin: tuple[int, int], offset, src_indexes, **kwargs
     ) -> pd.DataFrame:
+        super().__init__(**kwargs)
         db_uri = "".join(["sqlite:///", str(db_file)])
         self.engine = create_engine(db_uri)
         self.center_bin = center_bin
@@ -29,10 +33,6 @@ class BinAttributes:
         self.src_indexes = src_indexes
         self.traces_table = "traces"
         self.bins_df = np.empty((3, 3), dtype=object)
-
-    def __del__(self):
-        """destructor to remove all figures as otherwise they accumulate in memory"""
-        plt.close("all")
 
     def get_bin(self, bin_src: int, bin_rcv: int):
         query = text(
@@ -53,6 +53,113 @@ class BinAttributes:
         )
         return bin_df
 
+    def get_surrounding_bins(self):
+        for i in [-1, 0, 1]:
+            for j in [-1, 0, 1]:
+                selector = np.array([i, j], dtype=int)
+                bin = (self.center_bin + selector).tolist()
+                self.bins_df[i, j] = self.get_bin(bin[0], bin[1])
+
+        return self.bins_df
+
+
+class Plot:
+    def __init__(self, bins_df):
+        self.bins_df = bins_df
+        self.legend = None
+        self.fig = None
+        self.axes = None
+        self.scale = 1
+
+    def setup_plot_cartesian(self):
+        self.fig, self.axes = plt.subplots(
+            3, 3, sharex=True, sharey=True, figsize=FIGSIZE
+        )
+        self.fig.canvas.mpl_connect("resize_event", self.on_resize)
+        self.fig.tight_layout(pad=1.2)
+        self.fig.subplots_adjust(wspace=0, hspace=0)
+        labelsize = BASE_FONTSIZE
+        for i, ax in enumerate(self.axes.flat):
+            ax.tick_params(axis="both", labelsize=labelsize)
+            if i == 6:
+                ax.tick_params(left=True, bottom=True)
+                ax.label_outer()
+            else:
+                ax.tick_params(left=False, bottom=False)
+                ax.tick_params(labelleft=False, labelbottom=False)
+
+        ax.xaxis.set_major_locator(ticker.MaxNLocator(5))
+        ax.yaxis.set_major_locator(ticker.MaxNLocator(5))
+
+    def setup_plot_polar(self):
+        self.fig, axes_cartesian = plt.subplots(
+            3, 3, sharex=True, sharey=True, figsize=FIGSIZE
+        )
+        self.fig.canvas.mpl_connect("resize_event", self.on_resize)
+        axes = []
+        self.fig.subplots_adjust(wspace=0.0, hspace=0.0)
+        self.fig.tight_layout(pad=0)
+        self.fig.subplots_adjust(bottom=0.2)
+        for axc in axes_cartesian.flat:
+            axc.tick_params(
+                left=False, bottom=False, labelleft=False, labelbottom=False
+            )
+            axc.set_aspect("equal")
+            ax = self.fig.add_axes(
+                axc.get_position(),
+                projection="windrose",
+                frameon=False,
+            )
+            ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+            axes.append(ax)
+
+        self.axes = np.array(axes).reshape(3, 3)
+
+    def get_scaled_fontsize(self, base_fontsize: float) -> float:
+        if self.fig is None:
+            return float(base_fontsize)
+
+        width, height = self.fig.get_size_inches()
+        if width <= 0 or height <= 0:
+            return float(base_fontsize)
+
+        self.scale = min(
+            width / FIGSIZE[0], height / FIGSIZE[1]
+        )
+        return max(MIN_TEXT, base_fontsize * self.scale)
+
+    def update_text_sizes(self) -> None:
+        size = self.get_scaled_fontsize(BASE_FONTSIZE)
+        print(f"{size=} , {size / BASE_FONTSIZE=}")
+        for i, ax in enumerate(np.array(self.axes).flat):
+            for t in ax.texts:
+                t.set_fontsize(size)
+            if i == 6:
+                ax.tick_params(axis="both", labelsize=size)
+
+        if not self.legend:
+            return
+
+        for text in self.legend.get_texts():
+            text.set_fontsize(size)
+
+        self.fig.canvas.draw_idle()
+
+    def on_resize(self, event=None) -> None:
+        self.update_text_sizes()
+
+    def plot_diagram(self, plot_fn):
+        for i in [-1, 0, 1]:
+            for j in [-1, 0, 1]:
+                plot_fn(i, j)
+
+        self.update_text_sizes()
+        return self.fig
+
+    @staticmethod
+    def plot():
+        plt.show()
+
     def calc_bin_values(self, i: int, j: int) -> tuple[int, int, int, float, float]:
         bin_df = self.bins_df[i, j]
         bin_traces = len(bin_df)
@@ -69,84 +176,17 @@ class BinAttributes:
 
         return src_midline, src_midpoint, easting, northing, bin_traces
 
-    def get_surrounding_bins(self):
-        for i in [-1, 0, 1]:
-            for j in [-1, 0, 1]:
-                selector = np.array([i, j], dtype=int)
-                bin = (self.center_bin + selector).tolist()
-                self.bins_df[i, j] = self.get_bin(bin[0], bin[1])
 
-    def setup_plot_polar(self):
-        self.fig, axes_cartesian = plt.subplots(
-            3, 3, sharex=True, sharey=True, figsize=(8, 8)
-        )
-        axes = []
-        self.fig.subplots_adjust(wspace=0.0, hspace=0.0)
-        self.fig.tight_layout(pad=0)
-        self.fig.subplots_adjust(bottom=0.2)
-        for axc in axes_cartesian.flat:
-            axc.tick_params(
-                left=False, bottom=False, labelleft=False, labelbottom=False
-            )
-            ax = self.fig.add_axes(
-                axc.get_position(),
-                projection="windrose",
-                frameon=False,
-            )
-            ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
-            axes.append(ax)
+class PlotOffset(Plot):
+    def __init__(self, bins_df):
+        self.fig = None
+        self.axes = []
+        super().__init__(bins_df)
+        self.setup_plot_cartesian()
 
-        self.axes = np.array(axes).reshape(3, 3)
-
-    def setup_plot_cartesian(self):
-        self.fig, self.axes = plt.subplots(
-            3, 3, sharex=True, sharey=True, figsize=(8, 8)
-        )
-        self.fig.tight_layout(pad=1.2)
-        self.fig.subplots_adjust(wspace=0, hspace=0)
-        for i, ax in enumerate(self.axes.flat):
-            ax.tick_params(axis="both", labelsize=8)
-            if i == 6:
-                ax.tick_params(left=True, bottom=True)
-                ax.label_outer()
-            else:
-                ax.tick_params(left=False, bottom=False)
-                ax.tick_params(labelleft=False, labelbottom=False)
-
-        ax.xaxis.set_major_locator(ticker.MaxNLocator(5))
-        ax.yaxis.set_major_locator(ticker.MaxNLocator(5))
-
-    def plot_rose(self, i: int, j: int) -> None:
-        bin_df = self.bins_df[i, j]
-        if bin_df.empty:
-            return
-        src_midline, src_midpoint, *_ = self.calc_bin_values(i, j)
-        bin_text = f"{src_midline}\n" f"{src_midpoint}"
-        azimuths = np.array(
-            [(azimuth + 360 if azimuth < 0 else azimuth) for azimuth in bin_df.azimuth]
-        )
-        offsets = bin_df.offset
-
-        self.axes[1 + i, 1 + j].text(
-            0,
-            0,
-            bin_text,
-            size=10,
-            color="red",
-            transform=self.axes[1 + i][1 + j].transAxes,
-            ha="left",
-            va="bottom",
-        )
-        self.axes[i + 1][j + 1].bar(
-            azimuths,
-            offsets,
-            bins=np.arange(0, self.offset, int(self.offset * PLOT_BINS_WIDTH)),
-            opening=1.0,
-            nsector=NSECTORS,
-            edgecolor="white",
-        )
-        if i == 1 and j == -1:
-            self.axes[i + 1][j + 1].legend(bbox_to_anchor=(-0.1, -0.7))
+    def __del__(self):
+        """destructor to remove all figures as otherwise they accumulate in memory"""
+        plt.close("all")
 
     def plot_offset(self, i: int, j) -> None:
         bin_df = self.bins_df[i, j]
@@ -158,8 +198,29 @@ class BinAttributes:
         traces = np.arange(1, len(offsets) + 1, 1)
         self.axes[1 + i, 1 + j].bar(traces, offsets)
         self.axes[1 + i, 1 + j].text(
-            0.1 * traces[-1], 0.85 * offsets[-1], bin_text, size=10, color="red"
+            0.05 * traces[-1],
+            0.90 * offsets[-1],
+            bin_text,
+            size=BASE_FONTSIZE,
+            color="red",
         )
+
+    def diagram(self):
+        return self.plot_diagram(self.plot_offset)
+
+
+class PlotSpider(Plot):
+
+    def __init__(self, bins_df, offset):
+        super().__init__(bins_df)
+        self.offset = offset
+        self.fig = None
+        self.axes = []
+        self.setup_plot_cartesian()
+
+    def __del__(self):
+        """destructor to remove all figures as otherwise they accumulate in memory"""
+        plt.close("all")
 
     def plot_spider(self, i: int, j) -> None:
         bin_df = self.bins_df[i, j]
@@ -185,21 +246,64 @@ class BinAttributes:
         self.axes[1 + i, 1 + j].set_xlim(-max_offset, max_offset)
         self.axes[1 + i, 1 + j].set_ylim(-max_offset, max_offset)
         self.axes[1 + i, 1 + j].set_aspect("equal")
-        self.axes[1 + i, 1 + j].text(
+        text = self.axes[1 + i, 1 + j].text(
             -max_offset * 0.95, -max_offset * 0.95, bin_text, size=10, color="red"
         )
+        self.dynamic_text = (text, float(BASE_FONTSIZE))
 
-    @staticmethod
-    def plot():
-        plt.show()
+    def diagram(self):
+        return self.plot_diagram(self.plot_spider)
 
-    def diagram(self, setup_plot_fn, plot_fn):
-        setup_plot_fn()
-        for i in [-1, 0, 1]:
-            for j in [-1, 0, 1]:
-                plot_fn(i, j)
 
-        return self.fig
+class PlotRose(Plot):
+    def __init__(self, bins_df, offset):
+        super().__init__(bins_df)
+        self.offset = offset
+        self.fig = None
+        self.axes = []
+        self.setup_plot_polar()
+
+    def __del__(self):
+        """destructor to remove all figures as otherwise they accumulate in memory"""
+        plt.close("all")
+
+    def diagram(self):
+        self.plot_diagram(self.plot_offset)
+
+    def plot_rose(self, i: int, j: int) -> None:
+        bin_df = self.bins_df[i, j]
+        if bin_df.empty:
+            return
+        src_midline, src_midpoint, *_ = self.calc_bin_values(i, j)
+        bin_text = f"{src_midline}\n" f"{src_midpoint}"
+        azimuths = np.array(
+            [(azimuth + 360 if azimuth < 0 else azimuth) for azimuth in bin_df.azimuth]
+        )
+        offsets = bin_df.offset
+
+        self.axes[1 + i, 1 + j].text(
+            0,
+            0,
+            bin_text,
+            size=BASE_FONTSIZE,
+            color="red",
+            transform=self.axes[1 + i][1 + j].transAxes,
+            ha="left",
+            va="bottom",
+        )
+        self.axes[i + 1][j + 1].bar(
+            azimuths,
+            offsets,
+            bins=np.arange(0, self.offset, int(self.offset * PLOT_BINS_WIDTH)),
+            opening=1.0,
+            nsector=NSECTORS,
+            edgecolor="white",
+        )
+        if i == 1 and j == -1:
+            self.legend = self.axes[i + 1][j + 1].legend(bbox_to_anchor=(-0.1, -0.7))
+
+    def diagram(self):
+        return self.plot_diagram(self.plot_rose)
 
 
 def main(argv: list):
@@ -211,11 +315,16 @@ def main(argv: list):
     center_bin = np.array([502, 675], dtype=int)
     config = DbTools(db_file).get_config_from_db()
     ba = BinAttributes(db_file, center_bin, config["offset"], config["src_indexes"])
-    ba.get_surrounding_bins()
-    ba.diagram(ba.setup_plot_polar, ba.plot_rose)
-    ba.diagram(ba.setup_plot_cartesian, ba.plot_offset)
-    ba.diagram(ba.setup_plot_cartesian, ba.plot_spider)
-    ba.plot()
+    bins_df = ba.get_surrounding_bins()
+    # plot_offset = PlotOffset(bins_df)
+    # plot_offset.diagram()
+    # plot_offset.plot()
+    # plot_spider = PlotSpider(bins_df, config["offset"])
+    # plot_spider.diagram()
+    # plot_spider.plot()
+    plot_rose = PlotRose(bins_df, config["offset"])
+    plot_rose.diagram()
+    plot_rose.plot()
 
 
 if __name__ == "__main__":

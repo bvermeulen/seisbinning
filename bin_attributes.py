@@ -18,6 +18,10 @@ OFFSET_MARGIN = 1.2
 BASE_FONTSIZE = 8
 FIGSIZE = (8, 8)
 MIN_TEXT = 4
+LEGEND_BOTTOM_SPACE = 0.20
+LEGEND_X = -0.1
+LEGEND_Y = -0.60
+LEGEND_VISIBLE_SCALE = 0.63
 
 
 class BinAttributes:
@@ -69,7 +73,6 @@ class Plot:
         self.legend = None
         self.fig = None
         self.axes = None
-        self.scale = 1
 
     def setup_plot_cartesian(self):
         self.fig, self.axes = plt.subplots(
@@ -99,7 +102,7 @@ class Plot:
         axes = []
         self.fig.subplots_adjust(wspace=0.0, hspace=0.0)
         self.fig.tight_layout(pad=0)
-        self.fig.subplots_adjust(bottom=0.2)
+        self.fig.subplots_adjust(bottom=LEGEND_BOTTOM_SPACE)
         for axc in axes_cartesian.flat:
             axc.tick_params(
                 left=False, bottom=False, labelleft=False, labelbottom=False
@@ -115,45 +118,50 @@ class Plot:
 
         self.axes = np.array(axes).reshape(3, 3)
 
-    def get_scaled_fontsize(self, base_fontsize: float) -> float:
+    def get_scale(self) -> float:
         if self.fig is None:
-            return float(base_fontsize)
+            return 1.0, 1.0
 
         width, height = self.fig.get_size_inches()
-        if width <= 0 or height <= 0:
-            return float(base_fontsize)
+        return min(width / FIGSIZE[0], height / FIGSIZE[1])
 
-        self.scale = min(
-            width / FIGSIZE[0], height / FIGSIZE[1]
-        )
-        return max(MIN_TEXT, base_fontsize * self.scale)
-
-    def update_text_sizes(self) -> None:
-        size = self.get_scaled_fontsize(BASE_FONTSIZE)
-        print(f"{size=} , {size / BASE_FONTSIZE=}")
+    def update_text_label_sizes(self) -> None:
+        scale = self.get_scale()
+        size = max(MIN_TEXT, scale * BASE_FONTSIZE)
         for i, ax in enumerate(np.array(self.axes).flat):
             for t in ax.texts:
                 t.set_fontsize(size)
             if i == 6:
                 ax.tick_params(axis="both", labelsize=size)
 
+        if self.legend:
+            for text in self.legend.get_texts():
+                text.set_fontsize(size)
+
+    def update_legend(self) -> None:
         if not self.legend:
             return
 
-        for text in self.legend.get_texts():
-            text.set_fontsize(size)
+        scale = self.get_scale()
+        if scale > LEGEND_VISIBLE_SCALE:
+            self.legend.set_visible(True)
 
-        self.fig.canvas.draw_idle()
+        else:
+            self.legend.set_visible(False)
+
+        self.legend.set_bbox_to_anchor((LEGEND_X , LEGEND_Y / scale))
 
     def on_resize(self, event=None) -> None:
-        self.update_text_sizes()
+        self.update_text_label_sizes()
+        self.update_legend()
+        self.fig.canvas.draw_idle()
 
     def plot_diagram(self, plot_fn):
         for i in [-1, 0, 1]:
             for j in [-1, 0, 1]:
                 plot_fn(i, j)
 
-        self.update_text_sizes()
+        self.update_text_label_sizes()
         return self.fig
 
     @staticmethod
@@ -300,7 +308,9 @@ class PlotRose(Plot):
             edgecolor="white",
         )
         if i == 1 and j == -1:
-            self.legend = self.axes[i + 1][j + 1].legend(bbox_to_anchor=(-0.1, -0.7))
+            self.legend = self.axes[i + 1][j + 1].legend(
+                bbox_to_anchor=(LEGEND_X, LEGEND_Y),
+            )
 
     def diagram(self):
         return self.plot_diagram(self.plot_rose)
@@ -316,12 +326,12 @@ def main(argv: list):
     config = DbTools(db_file).get_config_from_db()
     ba = BinAttributes(db_file, center_bin, config["offset"], config["src_indexes"])
     bins_df = ba.get_surrounding_bins()
-    # plot_offset = PlotOffset(bins_df)
-    # plot_offset.diagram()
-    # plot_offset.plot()
-    # plot_spider = PlotSpider(bins_df, config["offset"])
-    # plot_spider.diagram()
-    # plot_spider.plot()
+    plot_offset = PlotOffset(bins_df)
+    plot_offset.diagram()
+    plot_offset.plot()
+    plot_spider = PlotSpider(bins_df, config["offset"])
+    plot_spider.diagram()
+    plot_spider.plot()
     plot_rose = PlotRose(bins_df, config["offset"])
     plot_rose.diagram()
     plot_rose.plot()

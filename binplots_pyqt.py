@@ -236,8 +236,8 @@ class PyqtViewControl(QtWidgets.QMainWindow):
             fig.savefig(file_name)
 
     def resizeEvent(self, event):
-        self.update_attribute_figs()
         super().resizeEvent(event)
+        self.update_attribute_figs()
 
     def quit(self):
         sys.exit()

@@ -9,19 +9,22 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.ticker as ticker
 from bins import DbTools
+from matplotlib.projections import register_projection
 from windrose import WindroseAxes
 
 DEG2RAD = np.pi / 180.0
 PLOT_BINS_WIDTH = 1 / 5
 NSECTORS = 16
 OFFSET_MARGIN = 1.2
-BASE_FONTSIZE = 8
+BASE_FONTSIZE = 10
 FIGSIZE = (8, 8)
 MIN_TEXT = 4
 LEGEND_BOTTOM_SPACE = 0.20
 LEGEND_X = -0.1
 LEGEND_Y = -0.60
 LEGEND_VISIBLE_SCALE = 0.63
+
+register_projection(WindroseAxes)
 
 
 class BinAttributes:
@@ -74,9 +77,9 @@ class Plot:
         self.fig = None
         self.axes = None
 
-    def setup_plot_cartesian(self):
+    def setup_plot_cartesian(self, figsize):
         self.fig, self.axes = plt.subplots(
-            3, 3, sharex=True, sharey=True, figsize=FIGSIZE
+            3, 3, sharex=True, sharey=True, figsize=figsize
         )
         self.fig.canvas.mpl_connect("resize_event", self.on_resize)
         self.fig.tight_layout(pad=1.2)
@@ -93,16 +96,20 @@ class Plot:
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(5))
         ax.yaxis.set_major_locator(ticker.MaxNLocator(5))
+        self.update_text_label_sizes()
+        self.update_legend()
 
-    def setup_plot_polar(self):
+    def setup_plot_polar(self, figsize):
         self.fig, axes_cartesian = plt.subplots(
-            3, 3, sharex=True, sharey=True, figsize=FIGSIZE
+            3, 3, sharex=True, sharey=True, figsize=figsize
         )
         self.fig.canvas.mpl_connect("resize_event", self.on_resize)
         axes = []
         self.fig.subplots_adjust(wspace=0.0, hspace=0.0)
         self.fig.tight_layout(pad=0)
-        self.fig.subplots_adjust(bottom=LEGEND_BOTTOM_SPACE)
+        legend_space = LEGEND_BOTTOM_SPACE if self.get_scale() > LEGEND_VISIBLE_SCALE else 0
+        self.fig.subplots_adjust(bottom=legend_space)
+
         for axc in axes_cartesian.flat:
             axc.tick_params(
                 left=False, bottom=False, labelleft=False, labelbottom=False
@@ -117,6 +124,9 @@ class Plot:
             axes.append(ax)
 
         self.axes = np.array(axes).reshape(3, 3)
+
+        self.update_text_label_sizes()
+        self.update_legend()
 
     def get_scale(self) -> float:
         if self.fig is None:
@@ -149,7 +159,7 @@ class Plot:
         else:
             self.legend.set_visible(False)
 
-        self.legend.set_bbox_to_anchor((LEGEND_X , LEGEND_Y / scale))
+        self.legend.set_bbox_to_anchor((LEGEND_X, LEGEND_Y / scale))
 
     def on_resize(self, event=None) -> None:
         self.update_text_label_sizes()
@@ -161,7 +171,7 @@ class Plot:
             for j in [-1, 0, 1]:
                 plot_fn(i, j)
 
-        self.update_text_label_sizes()
+        self.on_resize()
         return self.fig
 
     @staticmethod
@@ -186,11 +196,11 @@ class Plot:
 
 
 class PlotOffset(Plot):
-    def __init__(self, bins_df):
+    def __init__(self, bins_df, fig_size):
         self.fig = None
         self.axes = []
         super().__init__(bins_df)
-        self.setup_plot_cartesian()
+        self.setup_plot_cartesian(fig_size)
 
     def __del__(self):
         """destructor to remove all figures as otherwise they accumulate in memory"""
@@ -206,7 +216,7 @@ class PlotOffset(Plot):
         traces = np.arange(1, len(offsets) + 1, 1)
         self.axes[1 + i, 1 + j].bar(traces, offsets)
         self.axes[1 + i, 1 + j].text(
-            0.05 * traces[-1],
+            0.00 * traces[-1],
             0.90 * offsets[-1],
             bin_text,
             size=BASE_FONTSIZE,
@@ -219,12 +229,12 @@ class PlotOffset(Plot):
 
 class PlotSpider(Plot):
 
-    def __init__(self, bins_df, offset):
+    def __init__(self, bins_df, offset, figsize):
         super().__init__(bins_df)
         self.offset = offset
         self.fig = None
         self.axes = []
-        self.setup_plot_cartesian()
+        self.setup_plot_cartesian(figsize)
 
     def __del__(self):
         """destructor to remove all figures as otherwise they accumulate in memory"""
@@ -254,29 +264,25 @@ class PlotSpider(Plot):
         self.axes[1 + i, 1 + j].set_xlim(-max_offset, max_offset)
         self.axes[1 + i, 1 + j].set_ylim(-max_offset, max_offset)
         self.axes[1 + i, 1 + j].set_aspect("equal")
-        text = self.axes[1 + i, 1 + j].text(
-            -max_offset * 0.95, -max_offset * 0.95, bin_text, size=10, color="red"
+        self.axes[1 + i, 1 + j].text(
+            -max_offset * 0.95, -max_offset * 0.95, bin_text, size=BASE_FONTSIZE, color="red"
         )
-        self.dynamic_text = (text, float(BASE_FONTSIZE))
 
     def diagram(self):
         return self.plot_diagram(self.plot_spider)
 
 
 class PlotRose(Plot):
-    def __init__(self, bins_df, offset):
+    def __init__(self, bins_df, offset, figsize):
         super().__init__(bins_df)
         self.offset = offset
         self.fig = None
         self.axes = []
-        self.setup_plot_polar()
+        self.setup_plot_polar(figsize)
 
     def __del__(self):
         """destructor to remove all figures as otherwise they accumulate in memory"""
         plt.close("all")
-
-    def diagram(self):
-        self.plot_diagram(self.plot_offset)
 
     def plot_rose(self, i: int, j: int) -> None:
         bin_df = self.bins_df[i, j]
@@ -290,8 +296,8 @@ class PlotRose(Plot):
         offsets = bin_df.offset
 
         self.axes[1 + i, 1 + j].text(
-            0,
-            0,
+            0.02,
+            0.02,
             bin_text,
             size=BASE_FONTSIZE,
             color="red",
@@ -326,13 +332,14 @@ def main(argv: list):
     config = DbTools(db_file).get_config_from_db()
     ba = BinAttributes(db_file, center_bin, config["offset"], config["src_indexes"])
     bins_df = ba.get_surrounding_bins()
-    plot_offset = PlotOffset(bins_df)
+    figsize = (6, 6)
+    plot_offset = PlotOffset(bins_df, figsize)
     plot_offset.diagram()
     plot_offset.plot()
-    plot_spider = PlotSpider(bins_df, config["offset"])
+    plot_spider = PlotSpider(bins_df, config["offset"], figsize)
     plot_spider.diagram()
     plot_spider.plot()
-    plot_rose = PlotRose(bins_df, config["offset"])
+    plot_rose = PlotRose(bins_df, config["offset"], figsize)
     plot_rose.diagram()
     plot_rose.plot()
 

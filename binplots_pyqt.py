@@ -10,11 +10,12 @@ import datetime
 from functools import partial
 import warnings
 from pathlib import Path
+import numpy as np
 from bins import DbTools
-from bin_attributes import BinAttributes
+from bin_attributes import BinAttributes, PlotOffset, PlotSpider, PlotRose
 from PyQt6 import uic, QtWidgets
 import matplotlib
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 matplotlib.use("QtAgg")
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -24,14 +25,12 @@ class MplCanvas(FigureCanvas):
     def __init__(self, fig):
         super().__init__(fig)
 
-
 class PyqtViewControl(QtWidgets.QMainWindow):
     """PyQt view and control"""
 
     def __init__(self, arguments, *args, **kwargs):
         super().__init__(*args, **kwargs)
         uic.loadUi(Path(__file__).parent / "binning_plots.ui", self)
-        print(arguments)
         if len(arguments) != 2:
             print("Provide the db file name as the first argument ...")
         self.bins_file_stem = Path(arguments[1]).parent / Path(arguments[1]).stem
@@ -102,6 +101,9 @@ class PyqtViewControl(QtWidgets.QMainWindow):
         self.LineEdit_07.setText(f"{int(self.config["offset"])}")
         self.figure_dict = {}
         self.center_bin_name = ""
+        self.bins_df = np.array([])
+        self.offset = None
+        self.src_indexes = []
 
     def select_bin(self):
         bin = self.LineEdit_01.text()
@@ -117,10 +119,10 @@ class PyqtViewControl(QtWidgets.QMainWindow):
 
         indexes = self.LineEdit_06.text()
         for delimeter in ["/", ",", ";"]:
-            indexes = indexes.replace(delimeter, " ")
+            self.src_indexes = indexes.replace(delimeter, " ")
         try:
-            indexes = [int(v) for v in indexes.split()]
-            if not indexes or not all(v > 0 for v in indexes):
+            self.src_indexes = [int(v) for v in indexes.split()]
+            if not self.src_indexes or not all(v > 0 for v in self.src_indexes):
                 raise ValueError("all indexes must be positive")
 
         except ValueError:
@@ -128,32 +130,48 @@ class PyqtViewControl(QtWidgets.QMainWindow):
 
         offset = self.LineEdit_07.text()
         try:
-            offset = float(offset)
-            if not (offset > 0):
+            self.offset = float(offset)
+            if not (self.offset > 0):
                 raise ValueError("max offset must be positive")
 
         except ValueError:
             return
 
         self.center_bin_name = f"{bin_src}_{bin_rcv}"
-        db_file = self.bins_file_stem.with_suffix(".sqlite")
-        ba = BinAttributes(db_file, (bin_src, bin_rcv), offset, indexes)
-        ba.get_surrounding_bins()
-        bin_line, bin_point, easting, northing, traces = ba.calc_bin_values(0, 0)
+        self.db_file = self.bins_file_stem.with_suffix(".sqlite")
+        ba = BinAttributes(self.db_file, (bin_src, bin_rcv), self.offset, self.src_indexes)
+        self.bins_df = ba.get_surrounding_bins()
+        self.update_attribute_figs()
+        del ba
+
+    def update_attribute_figs(self):
+        if self.bins_df.size == 0:
+            return
+
+        width = self.PlotFrame.width() / self.PlotFrame.logicalDpiX()
+        height = self.PlotFrame.height() / self.PlotFrame.logicalDpiY()
+        figsize = (width, height)
+        plot_offset = PlotOffset(self.bins_df, figsize)
+        plot_spider = PlotSpider(self.bins_df, self.offset, figsize)
+        plot_rose = PlotRose(self.bins_df, self.offset, figsize)
+        bin_line, bin_point, easting, northing, traces = plot_offset.calc_bin_values(0, 0)
         self.LineEdit_02.setText(f"{easting:.0f}")
         self.LineEdit_03.setText(f"{northing:.0f}")
         self.LineEdit_04.setText(f"{bin_line}/ {bin_point}")
         self.LineEdit_05.setText(f"{traces}")
-        self.LineEdit_06.setText(f"{", ".join(str(i) for i in indexes)}")
-        self.LineEdit_07.setText(f"{int(offset)}")
-        self.figure_dict["Offset"] = ba.diagram(ba.setup_plot_cartesian, ba.plot_offset)
-        self.figure_dict["Spider"] = ba.diagram(ba.setup_plot_cartesian, ba.plot_spider)
-        self.figure_dict["Rose"] = ba.diagram(ba.setup_plot_polar, ba.plot_rose)
+        self.LineEdit_06.setText(f"{", ".join(str(i) for i in self.src_indexes)}")
+        self.LineEdit_07.setText(f"{int(self.offset)}")
+        self.figure_dict["Offset"] = plot_offset.diagram()
+        self.figure_dict["Spider"] = plot_spider.diagram()
+        self.figure_dict["Rose"] = plot_rose.diagram()
         self.update_canvas_data(self.figure_dict)
         # make sure there is destructor (__del__) to apply plt.close('all') to remove all figures
-        del ba
+        del plot_offset
+        del plot_spider
+        del plot_rose
 
     def update_canvas_data(self, figure_dict):
+
         for key, value in self.plot_dict.items():
             value["fig"] = figure_dict.get(key)
             if value["canvas"]:

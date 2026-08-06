@@ -1,5 +1,4 @@
 import sys
-import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -41,7 +40,7 @@ class BinAttributes:
         self.traces_table = "traces"
         self.bins_df = np.empty((3, 3), dtype=object)
 
-    def get_bin(self, bin_src: int, bin_rcv: int):
+    def get_bin(self, bin_src: int, bin_rcv: int) -> pd.DataFrame:
         query = text(
             f"SELECT * FROM {self.traces_table} WHERE "
             f"bin_sp = :bin_sp AND bin_rp = :bin_rp AND "
@@ -60,7 +59,7 @@ class BinAttributes:
         )
         return bin_df
 
-    def get_surrounding_bins(self):
+    def get_surrounding_bins(self) -> np.array:
         for i in [-1, 0, 1]:
             for j in [-1, 0, 1]:
                 selector = np.array([i, j], dtype=int)
@@ -71,13 +70,13 @@ class BinAttributes:
 
 
 class Plot:
-    def __init__(self, bins_df):
+    def __init__(self, bins_df: np.array):
         self.bins_df = bins_df
         self.legend = None
         self.fig = None
         self.axes = None
 
-    def setup_plot_cartesian(self, figsize):
+    def setup_plot_cartesian(self, figsize: tuple[int, int]) -> None:
         self.fig, self.axes = plt.subplots(
             3, 3, sharex=True, sharey=True, figsize=figsize
         )
@@ -96,10 +95,9 @@ class Plot:
 
         ax.xaxis.set_major_locator(ticker.MaxNLocator(5))
         ax.yaxis.set_major_locator(ticker.MaxNLocator(5))
-        self.update_text_label_sizes()
-        self.update_legend()
+        self.set_text_label_sizes()
 
-    def setup_plot_polar(self, figsize):
+    def setup_plot_polar(self, figsize: tuple[int, int]) -> None:
         self.fig, axes_cartesian = plt.subplots(
             3, 3, sharex=True, sharey=True, figsize=figsize
         )
@@ -107,7 +105,9 @@ class Plot:
         axes = []
         self.fig.subplots_adjust(wspace=0.0, hspace=0.0)
         self.fig.tight_layout(pad=0)
-        legend_space = LEGEND_BOTTOM_SPACE if self.get_scale() > LEGEND_VISIBLE_SCALE else 0
+        legend_space = (
+            LEGEND_BOTTOM_SPACE if self.get_scale() > LEGEND_VISIBLE_SCALE else 0
+        )
         self.fig.subplots_adjust(bottom=legend_space)
 
         for axc in axes_cartesian.flat:
@@ -125,17 +125,17 @@ class Plot:
 
         self.axes = np.array(axes).reshape(3, 3)
 
-        self.update_text_label_sizes()
-        self.update_legend()
+        self.set_text_label_sizes()
+        self.set_legend()
 
     def get_scale(self) -> float:
         if self.fig is None:
-            return 1.0, 1.0
+            return 1.0
 
         width, height = self.fig.get_size_inches()
         return min(width / FIGSIZE[0], height / FIGSIZE[1])
 
-    def update_text_label_sizes(self) -> None:
+    def set_text_label_sizes(self) -> None:
         scale = self.get_scale()
         size = max(MIN_TEXT, scale * BASE_FONTSIZE)
         for i, ax in enumerate(np.array(self.axes).flat):
@@ -148,25 +148,23 @@ class Plot:
             for text in self.legend.get_texts():
                 text.set_fontsize(size)
 
-    def update_legend(self) -> None:
+    def set_legend(self) -> None:
         if not self.legend:
             return
 
-        scale = self.get_scale()
-        if scale > LEGEND_VISIBLE_SCALE:
+        if (scale := self.get_scale()) > LEGEND_VISIBLE_SCALE:
             self.legend.set_visible(True)
+            self.legend.set_bbox_to_anchor((LEGEND_X, LEGEND_Y / scale))
 
         else:
             self.legend.set_visible(False)
 
-        self.legend.set_bbox_to_anchor((LEGEND_X, LEGEND_Y / scale))
-
     def on_resize(self, event=None) -> None:
-        self.update_text_label_sizes()
-        self.update_legend()
+        self.set_text_label_sizes()
+        self.set_legend()
         self.fig.canvas.draw_idle()
 
-    def plot_diagram(self, plot_fn):
+    def plot_diagram(self, plot_fn) -> mpl.figure.Figure:
         for i in [-1, 0, 1]:
             for j in [-1, 0, 1]:
                 plot_fn(i, j)
@@ -196,9 +194,7 @@ class Plot:
 
 
 class PlotOffset(Plot):
-    def __init__(self, bins_df, fig_size):
-        self.fig = None
-        self.axes = []
+    def __init__(self, bins_df: np.array, fig_size: tuple[int, int]):
         super().__init__(bins_df)
         self.setup_plot_cartesian(fig_size)
 
@@ -206,7 +202,7 @@ class PlotOffset(Plot):
         """destructor to remove all figures as otherwise they accumulate in memory"""
         plt.close("all")
 
-    def plot_offset(self, i: int, j) -> None:
+    def plot_offset(self, i: int, j: int) -> None:
         bin_df = self.bins_df[i, j]
         if bin_df.empty:
             return
@@ -216,8 +212,8 @@ class PlotOffset(Plot):
         traces = np.arange(1, len(offsets) + 1, 1)
         self.axes[1 + i, 1 + j].bar(traces, offsets)
         self.axes[1 + i, 1 + j].text(
-            0.00 * traces[-1],
-            0.90 * offsets[-1],
+            0.02 * traces[-1],
+            0.88 * offsets[-1],
             bin_text,
             size=BASE_FONTSIZE,
             color="red",
@@ -229,18 +225,16 @@ class PlotOffset(Plot):
 
 class PlotSpider(Plot):
 
-    def __init__(self, bins_df, offset, figsize):
+    def __init__(self, bins_df: np.array, offset: float, figsize: tuple[int, int]):
         super().__init__(bins_df)
         self.offset = offset
-        self.fig = None
-        self.axes = []
         self.setup_plot_cartesian(figsize)
 
     def __del__(self):
         """destructor to remove all figures as otherwise they accumulate in memory"""
         plt.close("all")
 
-    def plot_spider(self, i: int, j) -> None:
+    def plot_spider(self, i: int, j: int) -> None:
         bin_df = self.bins_df[i, j]
         if bin_df.empty:
             return
@@ -265,7 +259,11 @@ class PlotSpider(Plot):
         self.axes[1 + i, 1 + j].set_ylim(-max_offset, max_offset)
         self.axes[1 + i, 1 + j].set_aspect("equal")
         self.axes[1 + i, 1 + j].text(
-            -max_offset * 0.95, -max_offset * 0.95, bin_text, size=BASE_FONTSIZE, color="red"
+            -max_offset * 0.95,
+            -max_offset * 0.95,
+            bin_text,
+            size=BASE_FONTSIZE,
+            color="red",
         )
 
     def diagram(self):
@@ -273,11 +271,9 @@ class PlotSpider(Plot):
 
 
 class PlotRose(Plot):
-    def __init__(self, bins_df, offset, figsize):
+    def __init__(self, bins_df: np.array, offset: float, figsize: float[int, int]):
         super().__init__(bins_df)
         self.offset = offset
-        self.fig = None
-        self.axes = []
         self.setup_plot_polar(figsize)
 
     def __del__(self):
@@ -318,7 +314,7 @@ class PlotRose(Plot):
                 bbox_to_anchor=(LEGEND_X, LEGEND_Y),
             )
 
-    def diagram(self):
+    def diagram(self) -> mpl.figure.Figure:
         return self.plot_diagram(self.plot_rose)
 
 

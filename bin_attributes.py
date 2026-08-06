@@ -301,7 +301,7 @@ class PlotRose(Plot):
             ha="left",
             va="bottom",
         )
-        self.axes[i + 1][j + 1].bar(
+        self.axes[1 + i][1 + j].bar(
             azimuths,
             offsets,
             bins=np.arange(0, self.offset, int(self.offset * PLOT_BINS_WIDTH)),
@@ -310,7 +310,7 @@ class PlotRose(Plot):
             edgecolor="white",
         )
         if i == 1 and j == -1:
-            self.legend = self.axes[i + 1][j + 1].legend(
+            self.legend = self.axes[1 +i][1 +j].legend(
                 bbox_to_anchor=(LEGEND_X, LEGEND_Y),
             )
 

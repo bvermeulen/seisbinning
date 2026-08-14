@@ -12,7 +12,7 @@ azimuth 90 -
 """
 
 from pathlib import Path
-from general_dbase import progress_message_generator, DbConnect, CreateDB, DbGeneral
+from dbase_module import progress_message_generator, DbConnect, CreateDB, DbGeneral
 import json
 import numpy as np
 

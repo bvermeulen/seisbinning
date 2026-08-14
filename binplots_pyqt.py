@@ -11,7 +11,7 @@ from functools import partial
 import warnings
 from pathlib import Path
 import numpy as np
-from general_dbase import DbGeneral
+from dbase_module import DbGeneral
 from traces import Traces
 from bin_attributes import BinAttributes, PlotOffset, PlotSpider, PlotRose
 from PyQt6 import uic, QtWidgets

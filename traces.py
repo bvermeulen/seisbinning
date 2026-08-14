@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import math
 from sqlalchemy import create_engine, text, bindparam
-from general_dbase import DbGeneral
+from dbase_module import DbGeneral
 from bins import DEG2RAD, BinCalcs
 
 
@@ -152,37 +152,8 @@ class Traces:
         traces_df = pd.DataFrame(traces_dict)
         self.db_general.store_traces_df(traces_df)
         print(f"{trace_count=:,}")
-        # self.db_general.set_index_traces()
-        # print(f"complete indexing ...")
-
-    def clear_bins(self):
-        query = text("UPDATE bins SET bin_count = null;")
-        with self.engine.connect() as connection:
-            connection.execute(query)
-            connection.commit()
-
-    def bin_traces(self, offset: float) -> None:
-        src_indexes = self.db_general.get_config_from_db()["src_indexes"]
-        self.clear_bins()
-        query = text(
-            f"UPDATE bins SET bin_count = bc FROM "
-            f"(SELECT bin_sp, bin_rp, count(*) as bc "
-            f"from traces tr NOT INDEXED "
-            f"WHERE "
-            f"tr.offset >= 0 and tr.offset < :offset AND "
-            f"tr.src_index in :src_indexes "
-            f"GROUP BY tr.bin_sp, tr.bin_rp "
-            f") AS bins_grouped "
-            f"WHERE bins.bin_sp = bins_grouped.bin_sp and bins.bin_rp = bins_grouped.bin_rp;"
-        )
-        query = query.bindparams(bindparam("src_indexes", expanding=True))
-        with self.engine.connect() as connection:
-            connection.execute(query, {"offset": offset, "src_indexes": src_indexes})
-            connection.commit()
-
-        self.db_general.update_seis_config("offset", str(offset))
-        print(f"Binning of traces is completed ...")
-
+        self.db_general.set_index_traces()
+        print(f"complete indexing ...")
 
 def main(argv):
     if len(argv) != 2:

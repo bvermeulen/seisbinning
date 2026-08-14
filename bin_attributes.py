@@ -8,7 +8,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.ticker as ticker
-from general_dbase import DbGeneral
+from dbase_module import DbGeneral
 from traces import Traces
 from matplotlib.projections import register_projection
 from windrose import WindroseAxes

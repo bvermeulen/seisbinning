@@ -1,11 +1,23 @@
-{ 
-    "bin_files_stem": "d:/data/phase1_final_test",
-    "azimuth": 90, 
-    "easting": 701692.00, 
-    "northing": 3450142.50,
+{
+    "file_stem": "/home/bvermeulen/Work/Addaimah/06 QC/sps/sps_phase1_final",
+    "azimuth": 90,
+    "bin_easting_origin": 701692.00,
+    "bin_northing_origin": 3450142.50,
     "bin_sp_int": -25.0,
     "bin_rp_int": 12.5,
     "nb_bin_sp": 780,
     "nb_bin_rp": 1280,
+    "rcv_easting_origin": 710824.0,
+    "rcv_northing_origin": 3450177.6,
+    "rcv_line_origin": 1013,
+    "rcv_point_origin": 5369,
+    "rl_int": 300.0,
+    "rp_int": 25.0,
+    "src_easting_origin": 701686.5,
+    "src_northing_origin": 3464005.0,
+    "src_line_origin": 5003,
+    "src_point_origin": 1565,
+    "sl_int": 300.0,
+    "sp_int": -50,
     "epsg": 32638
 }

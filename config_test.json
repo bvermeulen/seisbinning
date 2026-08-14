@@ -1,9 +1,0 @@
-{ 
-    "azimuth": 90, 
-    "easting": 12.5, 
-    "northing": 25,
-    "bin_sp_int": -25.0,
-    "bin_rp_int": 12.5,
-    "nb_bin_sp": 6,
-    "nb_bin_rp": 8
-}

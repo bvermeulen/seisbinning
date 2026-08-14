@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -7,7 +8,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.ticker as ticker
-from bins import DbTools
+from general_dbase import DbGeneral
+from traces import Traces
 from matplotlib.projections import register_projection
 from windrose import WindroseAxes
 
@@ -28,12 +30,8 @@ register_projection(WindroseAxes)
 
 class BinAttributes:
 
-    def __init__(
-        self, db_file: Path, center_bin: tuple[int, int], offset, src_indexes, **kwargs
-    ) -> pd.DataFrame:
-        super().__init__(**kwargs)
-        db_uri = "".join(["sqlite:///", str(db_file)])
-        self.engine = create_engine(db_uri)
+    def __init__(self, db_file: Path, center_bin: tuple[int, int], offset, src_indexes):
+        self.engine = DbGeneral(db_file).engine
         self.center_bin = center_bin
         self.offset = offset
         self.src_indexes = src_indexes
@@ -310,7 +308,7 @@ class PlotRose(Plot):
             edgecolor="white",
         )
         if i == 1 and j == -1:
-            self.legend = self.axes[1 +i][1 +j].legend(
+            self.legend = self.axes[1 + i][1 + j].legend(
                 bbox_to_anchor=(LEGEND_X, LEGEND_Y),
             )
 
@@ -324,18 +322,52 @@ def main(argv: list):
         sys.exit()
 
     db_file = Path(argv[1])
-    center_bin = np.array([502, 675], dtype=int)
-    config = DbTools(db_file).get_config_from_db()
-    ba = BinAttributes(db_file, center_bin, config["offset"], config["src_indexes"])
+    db_handle = DbGeneral(db_file)
+    config = db_handle.get_config_from_db()
+    offset = 4500
+    db_handle.update_seis_config("offset", offset)
+    tr = Traces(db_file)
+
+    t1 = time.time_ns()
+    center_bin = np.array([300, 532], dtype=int)
+    tr.x_subset_on_bin(center_bin)
+    tr.create_traces()
+    ba = BinAttributes(db_file, center_bin, offset, config["src_indexes"])
     bins_df = ba.get_surrounding_bins()
+    t2 = time.time_ns()
+    print(f"trace creation, duration: {(t2 - t1) * 1e-9:.1f} seconds")
+
     figsize = (6, 6)
     plot_offset = PlotOffset(bins_df, figsize)
     plot_offset.diagram()
     plot_offset.plot()
-    plot_spider = PlotSpider(bins_df, config["offset"], figsize)
+    plot_spider = PlotSpider(bins_df, offset, figsize)
     plot_spider.diagram()
     plot_spider.plot()
-    plot_rose = PlotRose(bins_df, config["offset"], figsize)
+    plot_rose = PlotRose(bins_df, offset, figsize)
+    plot_rose.diagram()
+    plot_rose.plot()
+
+    t1 = time.time_ns()
+    center_bin = np.array([250, 532], dtype=int)
+    tr.x_subset_on_bin(center_bin)
+    tr.create_traces()
+    ba = BinAttributes(db_file, center_bin, offset, config["src_indexes"])
+    bins_df = ba.get_surrounding_bins()
+    t2 = time.time_ns()
+    print(f"trace creation, duration: {(t2 - t1) * 1e-9:.1f} seconds")
+
+    del plot_offset
+    del plot_spider
+    del plot_rose
+    figsize = (6, 6)
+    plot_offset = PlotOffset(bins_df, figsize)
+    plot_offset.diagram()
+    plot_offset.plot()
+    plot_spider = PlotSpider(bins_df, offset, figsize)
+    plot_spider.diagram()
+    plot_spider.plot()
+    plot_rose = PlotRose(bins_df, offset, figsize)
     plot_rose.diagram()
     plot_rose.plot()
 

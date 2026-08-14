@@ -11,7 +11,8 @@ from functools import partial
 import warnings
 from pathlib import Path
 import numpy as np
-from bins import DbTools
+from general_dbase import DbGeneral
+from traces import Traces
 from bin_attributes import BinAttributes, PlotOffset, PlotSpider, PlotRose
 from PyQt6 import uic, QtWidgets
 import matplotlib
@@ -25,6 +26,7 @@ class MplCanvas(FigureCanvas):
     def __init__(self, fig):
         super().__init__(fig)
 
+
 class PyqtViewControl(QtWidgets.QMainWindow):
     """PyQt view and control"""
 
@@ -34,7 +36,7 @@ class PyqtViewControl(QtWidgets.QMainWindow):
         if len(arguments) != 2:
             print("Provide the db file name as the first argument ...")
         self.bins_file_stem = Path(arguments[1]).parent / Path(arguments[1]).stem
-        self.config = DbTools(arguments[1]).get_config_from_db()
+        self.config = DbGeneral(arguments[1]).get_config_from_db()
         self.save_folder_description = "Save to: "
         self.ActionQuit.triggered.connect(self.quit)
         self.ActionDefaultDatabase.triggered.connect(
@@ -139,7 +141,13 @@ class PyqtViewControl(QtWidgets.QMainWindow):
 
         self.center_bin_name = f"{bin_src}_{bin_rcv}"
         self.db_file = self.bins_file_stem.with_suffix(".sqlite")
-        ba = BinAttributes(self.db_file, (bin_src, bin_rcv), self.offset, self.src_indexes)
+        tr = Traces(self.db_file)
+        tr.x_subset_on_bin((bin_src, bin_rcv))
+        tr.create_traces()
+
+        ba = BinAttributes(
+            self.db_file, (bin_src, bin_rcv), self.offset, self.src_indexes
+        )
         self.bins_df = ba.get_surrounding_bins()
         self.update_attribute_figs()
         del ba
@@ -154,7 +162,9 @@ class PyqtViewControl(QtWidgets.QMainWindow):
         plot_offset = PlotOffset(self.bins_df, figsize)
         plot_spider = PlotSpider(self.bins_df, self.offset, figsize)
         plot_rose = PlotRose(self.bins_df, self.offset, figsize)
-        bin_line, bin_point, easting, northing, traces = plot_offset.calc_bin_values(0, 0)
+        bin_line, bin_point, easting, northing, traces = plot_offset.calc_bin_values(
+            0, 0
+        )
         self.LineEdit_02.setText(f"{easting:.0f}")
         self.LineEdit_03.setText(f"{northing:.0f}")
         self.LineEdit_04.setText(f"{bin_line}/ {bin_point}")
@@ -200,7 +210,7 @@ class PyqtViewControl(QtWidgets.QMainWindow):
             self.bins_file_stem = Path(bfn).parent / Path(bfn).stem
 
         self.DbLabel.setText(self.bins_file_stem.stem)
-        self.config = DbTools(
+        self.config = DbGeneral(
             self.bins_file_stem.with_suffix(".sqlite")
         ).get_config_from_db()
         self.clear_vals()
